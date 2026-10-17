@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NoteBook - Personal Cloud Workspace</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- HLS.js for .m3u8 streaming support -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+
+  <!-- NoteBook Protected Vault Screen -->
+  <div class="auth-overlay active" id="authOverlay">
+    <div class="auth-card">
+      <div class="auth-icon-wrap">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+          <line x1="9" y1="7" x2="15" y2="7"></line>
+          <line x1="9" y1="11" x2="13" y2="11"></line>
+        </svg>
+      </div>
+      <h2>Note<span>Book</span></h2>
+      <p class="auth-subtitle">Personal Workspace & Protected Vault</p>
+      
+      <form id="loginForm" class="auth-form" onsubmit="return false;">
+        <div class="auth-input-wrap">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <input type="password" id="authPassword" placeholder="Enter notebook password..." required autocomplete="current-password">
+        </div>
+        <div class="auth-error" id="authError"></div>
+        <button type="submit" class="btn btn-primary btn-unlock" id="unlockBtn">
+          Unlock Workspace
+        </button>
+      </form>
+      <div class="auth-footer">Protected by AES-256 HMAC Authentication</div>
+    </div>
+  </div>
+
+  <!-- Navbar -->
+  <header class="navbar">
+    <div class="nav-left">
+      <div class="logo">Note<span>Book</span></div>
+      <nav class="nav-links">
+        <a href="#" class="active" id="navHome">Home</a>
+        <a href="#trending">Trending</a>
+        <a href="#cinema">Cinema</a>
+      </nav>
+    </div>
+    <div class="nav-right">
+      <div class="search-box">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="searchInput" placeholder="Search titles, library..." autocomplete="off">
+        <div class="search-dropdown" id="searchDropdown"></div>
+      </div>
+      <button class="nav-lock-btn" id="lockWorkspaceBtn" title="Lock Workspace">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <span>Lock</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero" id="heroBanner">
+    <div class="hero-content">
+      <span class="badge" id="heroBadge">Featured Today</span>
+      <h1 id="heroTitle">Loading Movies...</h1>
+      <p id="heroDesc">Explore personal collection, library, and entertainment on NoteBook.</p>
+      <div class="hero-actions">
+        <button class="btn btn-primary" id="heroPlayBtn">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+            <path d="M8 5v14l11-7z"/>
+          </svg>
+          Play Now
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Catalog Rows -->
+  <main class="container" id="contentContainer">
+    <div class="loading-spinner" id="spinner"></div>
+  </main>
+
+  <!-- Video Playback & Detail Modal -->
+  <div class="modal" id="playerModal">
+    <div class="modal-content">
+      <button class="modal-close" id="closeModal" title="Close">✕</button>
+      
+      <!-- Video Player Viewport -->
+      <div class="player-wrapper">
+        <video id="videoPlayer" controls autoplay playsinline preload="auto"></video>
+      </div>
+
+      <!-- Information & Controls -->
+      <div class="modal-details">
+        <div class="modal-header-row">
+          <div>
+            <h2 id="modalTitle">Loading title...</h2>
+            <div class="meta-row">
+              <span class="rating" id="modalRating">★ 8.5</span>
+              <span class="badge" id="modalBadge">HD Stream</span>
+            </div>
+          </div>
+          
+          <!-- Stream Quality Selector -->
+          <div class="quality-picker">
+            <label for="qualitySelect">Quality:</label>
+            <select id="qualitySelect"></select>
+          </div>
+        </div>
+
+        <p id="modalDesc">Loading description...</p>
+
+        <!-- Episode Selector (for Web Series / Short TV) -->
+        <div class="episodes-section" id="episodesSection" style="display: none;">
+          <h3>Select Episode</h3>
+          <div class="episode-list" id="episodeList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
