@@ -12,11 +12,66 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// MovieBox API Constants
+// MovieBox API Constants & Gateway Hosts
 const SECRET = "76iRl07s0xSN9jqmEWAt79EBJZulIQIsV64FZr2O";
-const HOST = "api6.aoneroom.com";
-
+const HOSTS = [
+  process.env.API_HOST || "api4sg.aoneroom.com",
+  "api6.aoneroom.com",
+  "api.inmoviebox.com",
+  "api3.aoneroom.com"
+];
+let activeHost = HOSTS[0];
 let userToken = ""; // Auto-managed Guest JWT Token
+
+// Device Info Config (Defaults to India region & Indian MCC so Indian/Hindi catalog & streams load)
+const CLIENT_REGION = process.env.CLIENT_REGION || "IN";
+const CLIENT_TIMEZONE = process.env.CLIENT_TIMEZONE || (CLIENT_REGION === "IN" ? "Asia/Kolkata" : "America/New_York");
+const CLIENT_SP_CODE = process.env.CLIENT_SP_CODE || (CLIENT_REGION === "IN" ? "40445" : "");
+
+// Pure Node.js HTTPS Proxy Tunneling Support (Zero external dependencies)
+const PROXY_URL = process.env.PROXY_URL || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "";
+let proxyAgent = null;
+
+if (PROXY_URL) {
+  try {
+    const parsedProxy = new URL(PROXY_URL);
+    proxyAgent = new https.Agent({
+      createConnection(options, callback) {
+        const connectReq = http.request({
+          host: parsedProxy.hostname,
+          port: parsedProxy.port || 8080,
+          method: 'CONNECT',
+          path: `${options.host}:${options.port || 443}`,
+          headers: {
+            'Host': `${options.host}:${options.port || 443}`,
+            ...(parsedProxy.username ? {
+              'Proxy-Authorization': `Basic ${Buffer.from(`${decodeURIComponent(parsedProxy.username)}:${decodeURIComponent(parsedProxy.password)}`).toString('base64')}`
+            } : {})
+          }
+        });
+        connectReq.on('connect', (res, socket) => {
+          if (res.statusCode === 200) {
+            const tls = require('tls');
+            const tlsSocket = tls.connect({
+              socket: socket,
+              servername: options.host
+            }, () => {
+              callback(null, tlsSocket);
+            });
+            tlsSocket.on('error', callback);
+          } else {
+            callback(new Error(`Proxy CONNECT returned HTTP ${res.statusCode}`));
+          }
+        });
+        connectReq.on('error', callback);
+        connectReq.end();
+      }
+    });
+    console.log(`[Proxy] API requests will route through proxy: ${parsedProxy.hostname}:${parsedProxy.port || 8080}`);
+  } catch (err) {
+    console.error("[Proxy] Initialization error:", err.message);
+  }
+}
 
 // 1. Client Token Generator
 function getClientToken() {
@@ -28,7 +83,7 @@ function getClientToken() {
 
 // 2. Client Device Info Header (Matching exact APK version)
 function getClientInfo() {
-  return JSON.stringify({
+  const info = {
     package_name: "com.community.oneroom",
     version_name: "4.0.03.0930.03",
     version_code: 50020132,
@@ -39,9 +94,13 @@ function getClientInfo() {
     model: "TECNO LH7n",
     system_language: "en",
     net: "wifi",
-    region: "US",
-    timezone: "America/New_York"
-  });
+    region: CLIENT_REGION,
+    timezone: CLIENT_TIMEZONE
+  };
+  if (CLIENT_SP_CODE) {
+    info.sp_code = CLIENT_SP_CODE;
+  }
+  return JSON.stringify(info);
 }
 
 // 3. Query Parameter Sorter (Strict alphabetical ordering required for HMAC)
@@ -54,7 +113,7 @@ function sortQueryParams(queryStr) {
 }
 
 // 4. HMAC-MD5 Signature Generator
-function signRequest(method, path, query = "", token = "", body = "") {
+function signRequest(method, path, query = "", token = "", body = "", host = activeHost) {
   const timestamp = Date.now();
   const sortedQuery = sortQueryParams(query);
   const fullPathWithQuery = path + (sortedQuery ? `?${sortedQuery}` : "");
@@ -75,7 +134,7 @@ function signRequest(method, path, query = "", token = "", body = "") {
   const signature = `${timestamp}|2|${hmac}`;
 
   const headers = {
-    'Host': HOST,
+    'Host': host,
     'X-Client-Info': getClientInfo(),
     'X-Client-Status': '1',
     'x-tr-signature': signature,
@@ -96,19 +155,25 @@ function signRequest(method, path, query = "", token = "", body = "") {
   return { headers, fullPathWithQuery };
 }
 
-// 5. Unified HTTPS Request Executor (supports GET and POST with body)
-function makeApiRequest(method, path, query = "", body = null) {
+// 5. Unified HTTPS Request Executor on a specific host
+function executeSingleApiRequest(method, path, query = "", body = null, targetHost = activeHost) {
   return new Promise((resolve, reject) => {
     const bodyStr = body ? (typeof body === 'string' ? body : JSON.stringify(body)) : "";
-    const { headers, fullPathWithQuery } = signRequest(method, path, query, userToken, bodyStr);
+    const { headers, fullPathWithQuery } = signRequest(method, path, query, userToken, bodyStr, targetHost);
 
-    const clientReq = https.request({
-      hostname: HOST,
+    const reqOptions = {
+      hostname: targetHost,
       path: fullPathWithQuery,
       method: method.toUpperCase(),
       headers: headers,
       timeout: 15000
-    }, (res) => {
+    };
+
+    if (proxyAgent) {
+      reqOptions.agent = proxyAgent;
+    }
+
+    const clientReq = https.request(reqOptions, (res) => {
       let data = "";
 
       // Auto-extract and refresh guest JWT token from response headers
@@ -140,14 +205,44 @@ function makeApiRequest(method, path, query = "", body = null) {
   });
 }
 
+// 6. Resilient API Request Executor with Automatic Gateway Failover
+async function makeApiRequest(method, path, query = "", body = null) {
+  let lastResult = null;
+  // Try activeHost first
+  try {
+    const res = await executeSingleApiRequest(method, path, query, body, activeHost);
+    if (res && (res.code === 0 || res.code === 200)) {
+      return res;
+    }
+    lastResult = res;
+  } catch (err) {
+    lastResult = { code: -1, error: err.message };
+  }
+
+  // If activeHost returned an error (such as 406 "find no content") or network error, failover to other hosts
+  for (const host of HOSTS) {
+    if (host === activeHost) continue;
+    try {
+      const res = await executeSingleApiRequest(method, path, query, body, host);
+      if (res && (res.code === 0 || res.code === 200)) {
+        console.log(`[Host Failover] Switched activeHost from ${activeHost} to ${host}`);
+        activeHost = host;
+        return res;
+      }
+      lastResult = res;
+    } catch (err) {}
+  }
+  return lastResult;
+}
+
 // Ensure JWT token is active
 async function ensureToken() {
   if (!userToken) {
     try {
       await makeApiRequest("GET", "/wefeed-mobile-bff/tab-operating");
-      console.log(" Guest JWT Token initialized successfully.");
+      console.log(`[Init] Guest JWT Token initialized successfully on ${activeHost}.`);
     } catch(err) {
-      console.error("Token init error:", err.message);
+      console.error("[Init] Token init error:", err.message);
     }
   }
 }
@@ -190,6 +285,55 @@ function requireAuth(req, res, next) {
 // Keep-Alive / Health Endpoint (Public)
 app.get('/ping', (req, res) => {
   res.json({ status: "alive", timestamp: Date.now() });
+});
+
+// Diagnostic & Gateway Status Endpoint
+app.get('/api/diagnose', async (req, res) => {
+  const pwd = req.query.pwd || req.query.password;
+  const authHeader = req.headers['x-auth-token'] || req.query.auth;
+  if (pwd !== ADMIN_PASSWORD && !verifySessionToken(authHeader)) {
+    return res.status(401).json({ error: "Unauthorized. Pass ?password=#Admin@123 or header x-auth-token." });
+  }
+
+  const results = {
+    activeHost,
+    hosts: HOSTS,
+    region: CLIENT_REGION,
+    timezone: CLIENT_TIMEZONE,
+    sp_code: CLIENT_SP_CODE,
+    hasProxy: !!proxyAgent,
+    hasToken: !!userToken,
+    serverTime: new Date().toISOString()
+  };
+
+  // 1. Get server egress IP
+  try {
+    const ipRes = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(5000) });
+    results.egressIp = await ipRes.json();
+  } catch(e) {
+    results.egressIp = { error: e.message };
+  }
+
+  // 2. Test candidate hosts
+  results.tests = {};
+  for (const host of HOSTS) {
+    try {
+      const tab = await executeSingleApiRequest("GET", "/wefeed-mobile-bff/tab-operating", "", null, host);
+      const detail = await executeSingleApiRequest("GET", "/wefeed-mobile-bff/subject-api/get", "subjectId=9107376937579734040", null, host);
+      results.tests[host] = {
+        tabCode: tab?.code,
+        tabBanner: tab?.data?.items?.[0]?.title || "none",
+        detailCode: detail?.code,
+        detailMessage: detail?.message,
+        detailTitle: detail?.data?.title || "none",
+        detectorsCount: detail?.data?.resourceDetectors?.length || 0
+      };
+    } catch(err) {
+      results.tests[host] = { error: err.message };
+    }
+  }
+
+  res.json(results);
 });
 
 // Login Endpoint (Verify NoteBook Password)
